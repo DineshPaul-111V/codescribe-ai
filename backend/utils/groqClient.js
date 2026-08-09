@@ -83,7 +83,7 @@ export async function callGroq({
 
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': Bearer ${finalApiKey}
+           'Authorization': `Bearer ${finalApiKey}`
           },
 
           body: JSON.stringify({
