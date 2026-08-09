@@ -66,10 +66,14 @@ export async function callGroq({
 
   const MAX_RETRIES = 3;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  for (
+    let attempt = 1;
+    attempt <= MAX_RETRIES;
+    attempt++
+  ) {
     try {
       console.log(
-       `[Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}`
+        [Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}
       );
 
       const response = await fetch(
@@ -186,7 +190,7 @@ export async function callGroq({
         throw error;
       }
 
-      // Retry only rate-limit related errors
+      // Retry only rate-limit errors
       if (
         !error.message
           ?.toLowerCase()
@@ -211,15 +215,6 @@ export async function callGroq({
 
 /**
  * Remove Markdown code fences from AI output.
- *
- * Example:
- * python
- * print("hello")
- * 
- *
- * becomes:
- *
- * print("hello")
  */
 export function cleanMarkdownFences(text) {
   if (!text) {
@@ -228,13 +223,15 @@ export function cleanMarkdownFences(text) {
 
   let cleaned = text.trim();
 
-  // Remove opening code fence
+  // Remove opening code fence.
+  // Example: python
   cleaned = cleaned.replace(
-    /^[a-zA-Z0-9_-]*\s*/i,
+    /^[a-zA-Z0-9_-]\s/i,
     ''
   );
 
-  // Remove closing code fence
+  // Remove closing code fence.
+  // Example: 
   cleaned = cleaned.replace(
     /\s*$/,
     ''
@@ -250,14 +247,14 @@ export function parseGroqJson(text) {
   const cleaned =
     cleanMarkdownFences(text);
 
-  // First try direct JSON parsing
+  // First try direct JSON parsing.
   try {
     return JSON.parse(cleaned);
   } catch {
-    // Continue with extraction
+    // Continue with extraction.
   }
 
-  // Try extracting JSON array
+  // Try extracting JSON array.
   const arrayMatch =
     cleaned.match(/\[[\s\S]*\]/);
 
@@ -265,11 +262,11 @@ export function parseGroqJson(text) {
     try {
       return JSON.parse(arrayMatch[0]);
     } catch {
-      // Continue
+      // Continue.
     }
   }
 
-  // Try extracting JSON object
+  // Try extracting JSON object.
   const objectMatch =
     cleaned.match(/\{[\s\S]*\}/);
 
@@ -277,7 +274,7 @@ export function parseGroqJson(text) {
     try {
       return JSON.parse(objectMatch[0]);
     } catch {
-      // Continue
+      // Continue.
     }
   }
 
