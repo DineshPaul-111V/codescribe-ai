@@ -69,7 +69,7 @@ export async function callGroq({
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       console.log(
-        [Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}
+       `[Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}`
       );
 
       const response = await fetch(
