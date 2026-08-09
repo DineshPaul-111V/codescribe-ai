@@ -72,9 +72,10 @@ export async function callGroq({
     attempt++
   ) {
     try {
-   console.warn(
-  `Model ${modelName} failed, retrying...`
-)
+      console.log(
+        `[Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}`
+      );
+
       const response = await fetch(
         GROQ_API_URL,
         {
@@ -82,7 +83,7 @@ export async function callGroq({
 
           headers: {
             'Content-Type': 'application/json',
-           'Authorization': `Bearer ${finalApiKey}`
+            'Authorization': `Bearer ${finalApiKey}`
           },
 
           body: JSON.stringify({
@@ -113,7 +114,7 @@ export async function callGroq({
         const errorText = await response.text();
 
         console.warn(
-          [Groq] Rate limit reached. Attempt ${attempt}/${MAX_RETRIES}
+          `[Groq] Rate limit reached. Attempt ${attempt}/${MAX_RETRIES}`
         );
 
         const waitMs = getRetryDelay(
@@ -123,7 +124,7 @@ export async function callGroq({
         );
 
         console.warn(
-          [Groq] Waiting ${Math.ceil(waitMs / 1000)} seconds...
+          `[Groq] Waiting ${Math.ceil(waitMs / 1000)} seconds...`
         );
 
         if (attempt === MAX_RETRIES) {
@@ -145,7 +146,7 @@ export async function callGroq({
         const errorBody = await response.text();
 
         let errorMessage =
-          Groq API HTTP ${response.status}: ${response.statusText};
+          `Groq API HTTP ${response.status}: ${response.statusText}`;
 
         try {
           const parsed = JSON.parse(errorBody);
@@ -179,7 +180,7 @@ export async function callGroq({
       }
 
       console.log(
-        [Groq] Request successful using ${model}
+        `[Groq] Request successful using ${model}`
       );
 
       return content;
@@ -222,17 +223,15 @@ export function cleanMarkdownFences(text) {
 
   let cleaned = text.trim();
 
-  // Remove opening code fence.
-  // Example: python
+  // Remove opening code fence (e.g. ```js)
   cleaned = cleaned.replace(
-    /^[a-zA-Z0-9_-]\s/i,
+    /^```[a-zA-Z0-9_-]*\s*/i,
     ''
   );
 
-  // Remove closing code fence.
-  // Example: 
+  // Remove closing code fence (e.g. ```)
   cleaned = cleaned.replace(
-    /\s*$/,
+    /\s*```$/,
     ''
   );
 
