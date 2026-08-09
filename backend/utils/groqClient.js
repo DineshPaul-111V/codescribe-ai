@@ -1,258 +1,292 @@
-import { Router } from 'express';
-import {
-  callGroq,
-  cleanMarkdownFences,
-  parseGroqJson
-} from '../utils/groqClient.js';
+import dotenv from 'dotenv';
 
-const router = Router();
+dotenv.config();
 
-const REVIEW_SYSTEM_PROMPT = `
-You are a senior software engineer performing a thorough code review.
+const GROQ_API_URL =
+  'https://api.groq.com/openai/v1/chat/completions';
 
-Analyze the provided code and identify:
-- Bugs
-- Security vulnerabilities
-- Performance issues
-- Bad practices
-- Maintainability problems
-- Style inconsistencies
+export const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
 
-For each issue, return an object with:
-- line: approximate line number if identifiable, otherwise null
-- severity: one of "critical", "warning", "suggestion", "info"
-- issue: short title, maximum 10 words
-- explanation: clear and specific explanation with a practical fix, maximum 40 words
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
-Return ONLY valid JSON.
-Do not use markdown fences.
-Do not include any explanation outside the JSON array.
+/**
+ * Get the recommended retry delay from Groq.
+ */
+function getRetryDelay(response, errorText, attempt) {
+  // Prefer Retry-After header
+  const retryAfter = response.headers.get('retry-after');
 
-If there are no issues, return:
-[]
-`;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
 
-const DOCS_SYSTEM_PROMPT = `
-You are a professional software documentation expert.
-
-Take the provided code and return the same code with useful documentation added.
-
-Add:
-- Docstrings to functions and methods
-- Documentation to classes
-- Comments for non-obvious logic
-- Parameter and return-value documentation where appropriate
-
-Use the appropriate documentation style for the language:
-- JavaScript: JSDoc
-- Python: Python docstrings
-- Java: Javadoc
-- C#: XML documentation comments
-- Other languages: use the conventional documentation style
-
-IMPORTANT:
-Do not intentionally change program logic or functionality.
-Only add documentation.
-
-Return ONLY the documented source code.
-Do not use markdown code fences.
-Do not add explanations before or after the code.
-`;
-
-const README_SYSTEM_PROMPT = `
-You are a professional technical writer.
-
-Given the provided source code, generate a concise README.md section containing:
-
-1. What the module/code does in 2-3 sentences
-2. Main functions/classes in bullet points
-3. A basic usage example if it can be inferred
-4. Dependencies detected from imports
-
-Return ONLY clean Markdown.
-Do not include meta-commentary.
-`;
-
-const MAX_CODE_LENGTH = 30000;
-
-router.post('/', async (req, res) => {
-  try {
-    const {
-      code,
-      language = 'auto',
-      source = 'paste',
-      apiKey: bodyApiKey,
-      model
-    } = req.body;
-
-    const apiKey = req.headers['x-groq-api-key'] || bodyApiKey;
-
-    // -------------------------------------------------------
-    // Validate code
-    // -------------------------------------------------------
-
-    if (!code || typeof code !== 'string' || !code.trim()) {
-      return res.status(400).json({
-        error: 'Code input is required.'
-      });
+    if (!Number.isNaN(seconds)) {
+      return Math.ceil(seconds * 1000) + 500;
     }
+  }
 
-    // Prevent extremely large requests from consuming the TPM limit.
-    if (code.length > MAX_CODE_LENGTH) {
-      return res.status(413).json({
-        error: `Code is too large. Please provide a file smaller than ${MAX_CODE_LENGTH.toLocaleString()} characters.`
-      });
-    }
+  // Try to extract "in 2.77s" from Groq error
+  const match = errorText.match(
+    /(?:in|after)\s+(\d+(?:\.\d+)?)\s*s/i
+  );
 
-    const languageContext =
-      language && language !== 'auto'
-        ? `Language: ${language}`
-        : 'Language: automatically detect';
+  if (match) {
+    return Math.ceil(Number(match[1]) * 1000) + 500;
+  }
 
-    let review = [];
-    let documentedCode = '';
-    let readme = '';
+  // Fallback exponential backoff
+  return Math.min(
+    2000 * Math.pow(2, attempt - 1),
+    10000
+  );
+}
 
-    const errors = {};
+/**
+ * Calls the Groq API with retry handling.
+ */
+export async function callGroq({
+  systemPrompt,
+  userPrompt,
+  apiKey,
+  model = DEFAULT_MODEL,
+  temperature = 0.3,
+  maxTokens = 1200
+}) {
+  const finalApiKey =
+    apiKey || process.env.GROQ_API_KEY;
 
-    // =======================================================
-    // 1. CODE REVIEW
-    // =======================================================
+  if (
+    !finalApiKey ||
+    finalApiKey === 'your_groq_api_key_here'
+  ) {
+    throw new Error(
+      'GROQ_API_KEY is not configured.'
+    );
+  }
 
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log('[CodeScribe] Starting code review...');
+      console.log(
+        [Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}
+      );
 
-      const reviewResult = await callGroq({
-        systemPrompt: REVIEW_SYSTEM_PROMPT,
-        userPrompt: `
-${languageContext}
+      const response = await fetch(
+        GROQ_API_URL,
+        {
+          method: 'POST',
 
-Review the following source code:
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': Bearer ${finalApiKey}
+          },
 
-${code}
-        `,
-        apiKey,
-        model,
-        temperature: 0.2,
-        maxTokens: 1200
-      });
+          body: JSON.stringify({
+            model,
 
-      try {
-        review = parseGroqJson(reviewResult);
+            messages: [
+              {
+                role: 'system',
+                content: systemPrompt
+              },
+              {
+                role: 'user',
+                content: userPrompt
+              }
+            ],
 
-        if (!Array.isArray(review)) {
-          review = [];
+            temperature,
+            max_tokens: maxTokens
+          })
         }
-      } catch (parseErr) {
-        console.error(
-          '[CodeScribe] Review JSON parsing error:',
-          parseErr.message
+      );
+
+      // ---------------------------------------------
+      // 429 RATE LIMIT
+      // ---------------------------------------------
+
+      if (response.status === 429) {
+        const errorText = await response.text();
+
+        console.warn(
+          [Groq] Rate limit reached. Attempt ${attempt}/${MAX_RETRIES}
         );
 
-        errors.review =
-          'The AI returned an invalid code review format.';
+        const waitMs = getRetryDelay(
+          response,
+          errorText,
+          attempt
+        );
+
+        console.warn(
+          [Groq] Waiting ${Math.ceil(waitMs / 1000)} seconds...
+        );
+
+        if (attempt === MAX_RETRIES) {
+          throw new Error(
+            'Groq rate limit reached. Please wait a few seconds and try again.'
+          );
+        }
+
+        await sleep(waitMs);
+
+        continue;
       }
-    } catch (err) {
-      console.error(
-        '[CodeScribe] Review API error:',
-        err.message
+
+      // ---------------------------------------------
+      // OTHER API ERRORS
+      // ---------------------------------------------
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+
+        let errorMessage =
+          Groq API HTTP ${response.status}: ${response.statusText};
+
+        try {
+          const parsed = JSON.parse(errorBody);
+
+          if (parsed?.error?.message) {
+            errorMessage +=
+              ` - ${parsed.error.message}`;
+          }
+        } catch {
+          if (errorBody) {
+            errorMessage += ` - ${errorBody}`;
+          }
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      // ---------------------------------------------
+      // SUCCESS
+      // ---------------------------------------------
+
+      const data = await response.json();
+
+      const content =
+        data?.choices?.[0]?.message?.content || '';
+
+      if (!content) {
+        throw new Error(
+          'Groq returned an empty response.'
+        );
+      }
+
+      console.log(
+        [Groq] Request successful using ${model}
       );
 
-      errors.review = err.message;
-    }
+      return content;
 
-    // =======================================================
-    // 2. DOCUMENTATION
-    // =======================================================
+    } catch (error) {
+      if (attempt === MAX_RETRIES) {
+        throw error;
+      }
 
-    try {
-      console.log('[CodeScribe] Starting documentation generation...');
+      // Retry only rate-limit related errors
+      if (
+        !error.message
+          ?.toLowerCase()
+          .includes('rate limit')
+      ) {
+        throw error;
+      }
 
-      const docsResult = await callGroq({
-        systemPrompt: DOCS_SYSTEM_PROMPT,
-        userPrompt: `
-${languageContext}
-
-Document the following source code:
-
-${code}
-        `,
-        apiKey,
-        model,
-        temperature: 0.2,
-        maxTokens: 2000
-      });
-
-      documentedCode = cleanMarkdownFences(docsResult);
-    } catch (err) {
-      console.error(
-        '[CodeScribe] Documentation API error:',
-        err.message
+      await sleep(
+        Math.min(
+          2000 * Math.pow(2, attempt - 1),
+          10000
+        )
       );
-
-      errors.documentedCode = err.message;
     }
-
-    // =======================================================
-    // 3. README GENERATION
-    // =======================================================
-
-    try {
-      console.log('[CodeScribe] Starting README generation...');
-
-      const readmeResult = await callGroq({
-        systemPrompt: README_SYSTEM_PROMPT,
-        userPrompt: `
-${languageContext}
-
-Generate README documentation for the following source code:
-
-${code}
-        `,
-        apiKey,
-        model,
-        temperature: 0.2,
-        maxTokens: 1200
-      });
-
-      readme = cleanMarkdownFences(readmeResult);
-    } catch (err) {
-      console.error(
-        '[CodeScribe] README API error:',
-        err.message
-      );
-
-      errors.readme = err.message;
-    }
-
-    // =======================================================
-    // RESPONSE
-    // =======================================================
-
-    return res.json({
-      review,
-      documentedCode: documentedCode || code,
-      readme,
-      source,
-      language,
-      errors:
-        Object.keys(errors).length > 0
-          ? errors
-          : undefined
-    });
-
-  } catch (error) {
-    console.error(
-      '[CodeScribe] Error in /api/analyze:',
-      error
-    );
-
-    return res.status(500).json({
-      error:
-        error.message ||
-        'Internal Server Error during code analysis.'
-    });
   }
-});
 
-export default router;
+  throw new Error(
+    'Groq request failed after maximum retries.'
+  );
+}
+
+/**
+ * Remove Markdown code fences from AI output.
+ *
+ * Example:
+ * python
+ * print("hello")
+ * 
+ *
+ * becomes:
+ *
+ * print("hello")
+ */
+export function cleanMarkdownFences(text) {
+  if (!text) {
+    return '';
+  }
+
+  let cleaned = text.trim();
+
+  // Remove opening code fence
+  cleaned = cleaned.replace(
+    /^[a-zA-Z0-9_-]*\s*/i,
+    ''
+  );
+
+  // Remove closing code fence
+  cleaned = cleaned.replace(
+    /\s*$/,
+    ''
+  );
+
+  return cleaned.trim();
+}
+
+/**
+ * Parse JSON returned by Groq.
+ */
+export function parseGroqJson(text) {
+  const cleaned =
+    cleanMarkdownFences(text);
+
+  // First try direct JSON parsing
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Continue with extraction
+  }
+
+  // Try extracting JSON array
+  const arrayMatch =
+    cleaned.match(/\[[\s\S]*\]/);
+
+  if (arrayMatch) {
+    try {
+      return JSON.parse(arrayMatch[0]);
+    } catch {
+      // Continue
+    }
+  }
+
+  // Try extracting JSON object
+  const objectMatch =
+    cleaned.match(/\{[\s\S]*\}/);
+
+  if (objectMatch) {
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch {
+      // Continue
+    }
+  }
+
+  console.error(
+    '[Groq] Failed to parse JSON response:',
+    text
+  );
+
+  throw new Error(
+    'Groq response could not be parsed as valid JSON.'
+  );
+}
