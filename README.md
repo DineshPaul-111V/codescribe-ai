@@ -2,7 +2,7 @@
 
 > **An AI-powered developer tool that analyzes source code, identifies potential issues, generates documentation, and creates README summaries.**
 
-[🚀 Live Demo](https://codescribe-ai-692z.vercel.app/) · [📂 GitHub Repository](https://github.com/DineshPaul-111V/codescribe-ai)
+[🚀 Live Demo](https://codescribe-ai-692z.vercel.app/) 
 
 CodeScribe helps developers reduce the time spent on repetitive code review and documentation tasks.
 
