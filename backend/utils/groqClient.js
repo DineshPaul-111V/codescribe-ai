@@ -72,9 +72,9 @@ export async function callGroq({
     attempt++
   ) {
     try {
-      console.log(
-        [Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}
-      );
+     console.log(
+  `[Groq] Attempt ${attempt}/${MAX_RETRIES} using ${model}`
+);
 
       const response = await fetch(
         GROQ_API_URL,
